@@ -1,13 +1,14 @@
 """Chain that interprets a prompt and executes python code to do math."""
+import re
 from typing import Dict, List
 
+import numexpr
 from pydantic import Extra
 
 from langchain.chains.base import Chain
 from langchain.chains.llm import LLMChain
 from langchain.chains.llm_math.prompt import PROMPT
 from langchain.prompts.base import BasePromptTemplate
-from langchain.python import PythonREPL
 from langchain.schema import BaseLanguageModel
 
 
@@ -50,13 +51,17 @@ class LLMMathChain(Chain):
         """
         return [self.output_key]
 
+    def _evaluate_expression(self, expression: str) -> str:
+        output = str(numexpr.evaluate(expression.strip()))
+        # Remove the leading and trailing brackets from the output
+        return re.sub(r"^\[|\]$", "", output)
+
     def _process_llm_result(self, t: str) -> Dict[str, str]:
-        python_executor = PythonREPL()
         self.callback_manager.on_text(t, color="green", verbose=self.verbose)
         t = t.strip()
-        if t.startswith("```python"):
-            code = t[9:-4]
-            output = python_executor.run(code)
+        if t.startswith("```text"):
+            expression = t[7:-4].strip()
+            output = self._evaluate_expression(expression)
             self.callback_manager.on_text("\nAnswer: ", verbose=self.verbose)
             self.callback_manager.on_text(output, color="yellow", verbose=self.verbose)
             answer = "Answer: " + output
@@ -69,15 +74,14 @@ class LLMMathChain(Chain):
         return {self.output_key: answer}
 
     async def _aprocess_llm_result(self, t: str) -> Dict[str, str]:
-        python_executor = PythonREPL()
         if self.callback_manager.is_async:
             await self.callback_manager.on_text(t, color="green", verbose=self.verbose)
         else:
             self.callback_manager.on_text(t, color="green", verbose=self.verbose)
         t = t.strip()
-        if t.startswith("```python"):
-            code = t[9:-4]
-            output = python_executor.run(code)
+        if t.startswith("```text"):
+            expression = t[9:-4]
+            output = self._evaluate_expression(expression)
             if self.callback_manager.is_async:
                 await self.callback_manager.on_text("\nAnswer: ", verbose=self.verbose)
                 await self.callback_manager.on_text(
@@ -102,7 +106,9 @@ class LLMMathChain(Chain):
             prompt=self.prompt, llm=self.llm, callback_manager=self.callback_manager
         )
         self.callback_manager.on_text(inputs[self.input_key], verbose=self.verbose)
+        print(f"For input: {inputs[self.input_key]}", flush=True)
         t = llm_executor.predict(question=inputs[self.input_key], stop=["```output"])
+        print(f"For input: {inputs[self.input_key]}", flush=True)
         return self._process_llm_result(t)
 
     async def _acall(self, inputs: Dict[str, str]) -> Dict[str, str]:
